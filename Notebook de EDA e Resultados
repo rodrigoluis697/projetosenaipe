@@ -1,0 +1,57 @@
+import glob
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import seaborn as sns
+from scipy.signal import welch
+
+from src.data_loader import load_signal_file, parse_filename
+
+# Carregamento de amostras para visualização
+files = glob.glob('../data/*.csv')
+df_hh = load_signal_file(
+    [f for f in files if 'H_H_3_1' in f][0]
+)  # Saudável 45Hz Com carga
+df_ru = load_signal_file(
+    [f for f in files if 'R_U_3_1' in f][0]
+)  # Desbalanceamento 45Hz Com carga
+
+# Visualização no Domínio do Tempo
+fig, axes = plt.subplots(2, 1, figsize=(12, 6), sharex=True)
+axes[0].plot(
+    df_hh['time_sec'][:4200], df_hh['acc_2_axial_1'][:4200], label='Saudável (HH)'
+)
+axes[0].set_title('Sinal Temporal - Acelerômetro Axial 1 (45 Hz, Carga 1)')
+axes[0].set_ylabel('Aceleração (m/s²)')
+axes[0].grid(True)
+
+axes[1].plot(
+    df_ru['time_sec'][:4200],
+    df_ru['acc_2_axial_1'][:4200],
+    color='r',
+    label='Desbalanceamento (RU)',
+)
+axes[1].set_title('Sinal Temporal - Desbalanceamento de Rotor')
+axes[1].set_xlabel('Tempo (s)')
+axes[1].set_ylabel('Aceleração (m/s²)')
+axes[1].grid(True)
+plt.tight_layout()
+plt.show()
+
+# Visualização no Domínio da Frequência (PSD)
+fs = 42000
+f_hh, psd_hh = welch(df_hh['acc_2_axial_1'], fs=fs, nperseg=fs)
+f_ru, psd_ru = welch(df_ru['acc_2_axial_1'], fs=fs, nperseg=fs)
+
+plt.figure(figsize=(12, 4))
+plt.semilogy(f_hh, psd_hh, label='Saudável (HH)')
+plt.semilogy(f_ru, psd_ru, alpha=0.7, color='r', label='Desbalanceamento (RU)')
+plt.axvline(x=45, color='k', linestyle='--', label='1X Rotação (45 Hz)')
+plt.axvline(x=90, color='g', linestyle='--', label='2X Harmônica (90 Hz)')
+plt.xlim(0, 200)
+plt.title('Densidade Espectral de Potência (PSD) - Identificação de Picos 1X e 2X')
+plt.xlabel('Frequência (Hz)')
+plt.ylabel('PSD (V²/Hz ou (m/s²)²/Hz)')
+plt.legend()
+plt.grid(True)
+plt.show()
