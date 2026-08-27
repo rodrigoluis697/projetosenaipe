@@ -1,0 +1,240 @@
+import os
+import re
+import pandas as pd
+import numpy as np
+
+COLUMN_NAMES = [
+    'acc_1_drive_end', 
+    'mic_volts', 
+    'acc_2_axial_1', 
+    'acc_3_axial_2', 
+    'temperature_celsius'
+]
+
+SAMPLING_RATE = 42000  # 42 kHz
+
+def parse_filename(filepath: str) -> dict:
+    """Extrai metadata do nome do arquivo."""
+    filename = os.path.basename(filepath).replace('.csv', '')
+    parts = filename.split('_')
+    
+    label = f"{parts[0]}_{parts[1]}"
+    speed_code = int(parts[2])
+    load_code = int(parts[3])
+    
+    # 1: 15 Hz, 3: 45 Hz
+    speed_hz = 15.0 if speed_code == 1 else 45.0
+    
+    return {
+        'filepath': filepath,
+        'filename': filename,
+        'label': label,
+        'speed_code': speed_code,
+        'speed_hz': speed_hz,
+        'load_code': load_code
+    }
+
+def load_signal_file(filepath: str) -> pd.DataFrame:
+    """Carrega CSV mantendo ordem das colunas e insere timestamp sintético."""
+    df = pd.read_csv(filepath, header=None, names=COLUMN_NAMES)
+    df['time_sec'] = np.arange(len(df)) / SAMPLING_RATE[cite: 1]
+    return df
+import numpy as np
+import pandas as pd
+from scipy.stats import skew, kurtosis
+from scipy.signal import welch
+
+def extract_time_domain_features(signal: np.ndarray, prefix: str) -> dict:
+    """Calcula estatísticas no domínio do tempo."""
+    rms = np.sqrt(np.mean(signal**2))
+    peak = np.max(np.abs(signal))
+    std = np.std(signal)
+    mean = np.mean(signal)
+    
+    # Prevenção contra divisão por zero
+    crest_factor = peak / (rms + 1e-12)
+    shape_factor = rms / (np.mean(np.abs(signal)) + 1e-12)
+    impulse_factor = peak / (np.mean(np.abs(signal)) + 1e-12)
+    margin_factor = peak / ((np.mean(np.sqrt(np.abs(signal))))**2 + 1e-12)
+
+    return {
+        f'{prefix}_mean': mean,
+        f'{prefix}_std': std,
+        f'{prefix}_rms': rms,
+        f'{prefix}_peak': peak,
+        f'{prefix}_peak2peak': np.ptp(signal),
+        f'{prefix}_skew': skew(signal),
+        f'{prefix}_kurtosis': kurtosis(signal),
+        f'{prefix}_crest_factor': crest_factor,
+        f'{prefix}_shape_factor': shape_factor,
+        f'{prefix}_impulse_factor': impulse_factor,
+        f'{prefix}_margin_factor': margin_factor,
+    }
+
+def extract_frequency_features(signal: np.ndarray, fs: int, fundamental_freq: float, prefix: str) -> dict:
+    """Extrai Densidade Espectral de Potência e bandas harmônicas (Order Tracking proxy)."""
+    freqs, psd = welch(signal, fs=fs, nperseg=fs // 4)
+    
+    features = {
+        f'{prefix}_spectral_centroid': np.sum(freqs * psd) / (np.sum(psd) + 1e-12),
+        f'{prefix}_spectral_energy': np.sum(psd),
+        f'{prefix}_spectral_spread': np.sqrt(np.sum(((freqs - (np.sum(freqs * psd) / (np.sum(psd) + 1e-12)))**2) * psd) / (np.sum(psd) + 1e-12))
+    }
+    
+    # Energias das bandas harmônicas da rotação (1X, 2X, 3X)
+    for order in [1, 2, 3]:
+        center = order * fundamental_freq
+        bandwidth = 2.0  # Hz
+        mask = (freqs >= (center - bandwidth)) & (freqs <= (center + bandwidth))
+        features[f'{prefix}_energy_{order}X'] = np.sum(psd[mask])
+        
+    return features
+
+def process_file_windows(df: pd.DataFrame, meta: dict, window_size_sec: float = 1.0, overlap: float = 0.5) -> pd.DataFrame:
+    """Segmenta o sinal em janelas e extrai a matriz de atributos."""
+    fs = 42000
+    window_samples = int(window_size_sec * fs)
+    step_samples = int(window_samples * (1.0 - overlap))
+    total_samples = len(df)
+    
+    features_list = []
+    
+    sensor_cols = ['acc_1_drive_end', 'mic_volts', 'acc_2_axial_1', 'acc_3_axial_2']
+    
+    for start in range(0, total_samples - window_samples + 1, step_samples):
+        end = start + window_samples
+        sub_df = df.iloc[start:end]
+        
+        row_feat = {
+            'file_id': meta['filename'],
+            'label': meta['label'],
+            'speed_hz': meta['speed_hz'],
+            'load_code': meta['load_code'],
+            'target_temp_mean': sub_df['temperature_celsius'].mean(),
+            'target_temp_last': sub_df['temperature_celsius'].iloc[-1]
+        }
+        
+        for col in sensor_cols:
+            sig = sub_df[col].to_numpy()
+            time_feats = extract_time_domain_features(sig, prefix=col)
+            freq_feats = extract_frequency_features(sig, fs=fs, fundamental_freq=meta['speed_hz'], prefix=col)
+            
+            row_feat.update(time_feats)
+            row_feat.update(freq_feats)
+            
+        features_list.append(row_feat)
+        
+    return pd.DataFrame(features_list)
+  import os
+import glob
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import LeaveOneGroupOut
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import classification_report, confusion_matrix, f1_score
+from lightgbm import LGBMClassifier
+
+from src.data_loader import parse_filename, load_signal_file
+from src.feature_extraction import process_file_windows
+
+def main():
+    csv_files = glob.glob('data/*.csv')
+    if not csv_files:
+        print("Nenhum arquivo encontrado na pasta data/.")
+        return
+
+    print("--- Extraindo Features para o Módulo 1 ---")
+    all_features = []
+    for filepath in csv_files:
+        meta = parse_filename(filepath)
+        df = load_signal_file(filepath)
+        df_feat = process_file_windows(df, meta, window_size_sec=1.0, overlap=0.5)
+        all_features.append(df_feat)
+        
+    dataset = pd.concat(all_features, ignore_index=True)
+    
+    X = dataset.drop(columns=['file_id', 'label', 'target_temp_mean', 'target_temp_last'])
+    y = dataset['label']
+    groups = dataset['file_id']  # Isolamento por arquivo contra vazamento
+
+    logo = LeaveOneGroupOut()
+    
+    models = {
+        'RandomForest': RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1),
+        'LightGBM': LGBMClassifier(n_estimators=100, random_state=42, verbose=-1, n_jobs=-1)
+    }
+    
+    for name, model in models.items():
+        print(f"\n================ Avaliando {name} (Group Out Validation) ================")
+        y_true_all, y_pred_all = [], []
+        
+        for train_idx, test_idx in logo.split(X, y, groups=groups):
+            X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
+            y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
+            
+            model.fit(X_train, y_train)
+            preds = model.predict(X_test)
+            
+            y_true_all.extend(y_test)
+            y_pred_all.extend(preds)
+            
+        print("\nRelatório de Classificação (Agregado out-of-sample):")
+        print(classification_report(y_true_all, y_pred_all))
+        print("F1-Macro:", f1_score(y_true_all, y_pred_all, average='macro'))
+
+if __name__ == '__main__':
+    main()
+(Bônus: Softsensor de Temperatura)
+Python
+import glob
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import LeaveOneGroupOut
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+from lightgbm import LGBMRegressor
+
+from src.data_loader import parse_filename, load_signal_file
+from src.feature_extraction import process_file_windows
+
+def main():
+    csv_files = glob.glob('data/*.csv')
+    if not csv_files:
+        return
+        
+    print("--- Treinando Softsensor de Temperatura (Módulo 2) ---")
+    all_features = []
+    for filepath in csv_files:
+        meta = parse_filename(filepath)
+        df = load_signal_file(filepath)
+        # Janelas maiores (2s) adequadas à dinâmica da temperatura
+        df_feat = process_file_windows(df, meta, window_size_sec=2.0, overlap=0.5)
+        all_features.append(df_feat)
+        
+    dataset = pd.concat(all_features, ignore_index=True)
+    
+    X = dataset.drop(columns=['file_id', 'label', 'target_temp_mean', 'target_temp_last'])
+    y = dataset['target_temp_mean']
+    groups = dataset['file_id']
+    
+    logo = LeaveOneGroupOut()
+    model = LGBMRegressor(n_estimators=150, learning_rate=0.05, random_state=42, verbose=-1)
+    
+    y_true_all, y_pred_all = [], []
+    
+    for train_idx, test_idx in logo.split(X, y, groups=groups):
+        X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
+        y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
+        
+        model.fit(X_train, y_train)
+        preds = model.predict(X_test)
+        
+        y_true_all.extend(y_test)
+        y_pred_all.extend(preds)
+        
+    print("\n--- Desempenho do Softsensor ---")
+    print(f"RMSE: {np.sqrt(mean_squared_error(y_true_all, y_pred_all)):.4f} °C")
+    print(f"MAE:  {mean_absolute_error(y_true_all, y_pred_all):.4f} °C")
+    print(f"R²:   {r2_score(y_true_all, y_pred_all):.4f}")
+
+if __name__ == '__main__':
+    main()
