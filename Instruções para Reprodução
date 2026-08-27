@@ -1,0 +1,13 @@
+python -m venv venv
+source venv/bin/activate  # Ou venv\Scripts\activate no Windows
+pip install -r requirements.txt
+
+Dataset:
+Insira os 16 arquivos .csv extraídos no diretório data/.
+
+Execução:
+
+Para o pipeline de validação e treino do Módulo 1:
+python train_module1.py
+python train_module2.py
+Para visualizações detalhadas e geração dos gráficos espectrais, abra e execute o notebook notebooks/01_eda_and_baseline.ipynb.
