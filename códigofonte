@@ -1,0 +1,27 @@
+.Estrutura de Arquivos do Repositório
+├── data/                       # Diretório para os 16 arquivos CSV
+├── notebooks/
+│   └── 01_eda_and_baseline.ipynb # Notebook executável para geração de figuras e EDA
+├── src/
+│   ├── __init__.py
+│   ├── data_loader.py          # Leitura e reconstrução do vetor temporal (42 kHz)
+│   ├── feature_extraction.py   # Extração de features estatísticas e espectrais
+│   ├── pipelines.py            # Pipelines do Scikit-Learn / Optuna
+│   └── visualization.py        # Gráficos de sinais, FFT e matrizes de confusão
+├── train_module1.py            # Script CLI de treino e avaliação do Módulo 1
+├── train_module2.py            # Script CLI para o Softsensor do Módulo 2
+├── requirements.txt            # Dependências do projeto
+└── README.md                   # Documentação técnica completa 
+
+  numpy>=1.24.0
+pandas>=2.0.0
+scipy>=1.10.0
+scikit-learn>=1.3.0
+lightgbm>=4.0.0
+xgboost>=1.7.0
+optuna>=3.2.0
+matplotlib>=3.7.0
+seaborn>=0.12.0
+joblib>=1.3.0
+
+  
